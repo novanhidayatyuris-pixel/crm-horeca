@@ -9,24 +9,13 @@ import {
   FunnelChart, Funnel, LabelList, PieChart, Pie, Cell
 } from "recharts";
 
-/* -------------------------- Supabase via plain fetch -------------------------- */
+/* ------------------- Supabase via plain fetch (no SDK) -------------------
+   @supabase/supabase-js isn't available in this artifact sandbox, so we talk
+   to Supabase's REST (PostgREST) and Auth (GoTrue) HTTP endpoints directly. */
 
-const SB_URL = import.meta.env.VITE_SUPABASE_URL;
-const SB_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
-
-const SESSION_KEY = "crm_horeca_session";
-function saveSession(authData) {
-  try { localStorage.setItem(SESSION_KEY, JSON.stringify(authData)); } catch (_) {}
-}
-function loadSession() {
-  try {
-    const raw = localStorage.getItem(SESSION_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch (_) { return null; }
-}
-function clearSession() {
-  try { localStorage.removeItem(SESSION_KEY); } catch (_) {}
-}
+const SB_URL = "https://hibbakzafbgdmdckkjfd.supabase.co";
+const SB_ANON_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhpYmJha3phZmJnZG1kY2tramZkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ0OTkxNDksImV4cCI6MjEwMDA3NTE0OX0.h0J5SHT9OsQAXsCibN5VNd79cCTLB4XZ48Se-yxo-64";
 
 function authHeaders(token) {
   return { apikey: SB_ANON_KEY, Authorization: `Bearer ${token || SB_ANON_KEY}` };
@@ -51,9 +40,12 @@ async function sbSelect(table, token) {
 }
 
 async function sbSelectOne(table, id, token) {
-  const res = await fetch(`${SB_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}&select=*`, { headers: authHeaders(token) });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.message || "Gagal memuat data");
+  const url = `${SB_URL}/rest/v1/${table}?id=eq.${encodeURIComponent(id)}&select=*`;
+  const res = await fetch(url, { headers: authHeaders(token) });
+  const text = await res.text();
+  console.log("sbSelectOne status:", res.status, "body:", text);
+  if (!res.ok) throw new Error(text || "Gagal memuat data");
+  const data = text ? JSON.parse(text) : [];
   return data[0] || null;
 }
 
@@ -676,14 +668,12 @@ export default function App() {
   const [auth, setAuth] = useState(null); // { access_token, user }
   const [profile, setProfile] = useState(null);
   const [profileChecked, setProfileChecked] = useState(false);
-  const [restoring, setRestoring] = useState(true);
   const [active, setActive] = useState("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [db, setDb] = useState({ customers: [], prospects: [], followups: [], visits: [], products: [], quotations: [], orders: [], receivables: [], sales: [] });
   const [loadingData, setLoadingData] = useState(false);
 
   async function onLoggedIn(authData) {
-    saveSession(authData);
     setAuth(authData);
     setProfileChecked(false);
     try {
@@ -694,16 +684,6 @@ export default function App() {
     }
     setProfileChecked(true);
   }
-
-  // restore session from localStorage on first load
-  React.useEffect(() => {
-    const saved = loadSession();
-    if (saved) {
-      onLoggedIn(saved).finally(() => setRestoring(false));
-    } else {
-      setRestoring(false);
-    }
-  }, []);
 
   async function reloadAll() {
     if (!auth) return;
@@ -718,16 +698,12 @@ export default function App() {
   React.useEffect(() => { if (auth && profile) reloadAll(); }, [auth, profile]);
 
   function handleLogout() {
-    clearSession();
     setAuth(null);
     setProfile(null);
     setProfileChecked(false);
     setDb({ customers: [], prospects: [], followups: [], visits: [], products: [], quotations: [], orders: [], receivables: [], sales: [] });
   }
 
-  if (restoring) {
-    return <div className="min-h-screen flex items-center justify-center text-slate-400"><Loader2 className="animate-spin" size={22} /></div>;
-  }
   if (!auth) return <LoginScreen onLoggedIn={onLoggedIn} />;
 
   if (!profileChecked) {
