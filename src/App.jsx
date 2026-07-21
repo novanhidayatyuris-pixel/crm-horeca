@@ -1,8 +1,8 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useRef } from "react";
 import {
   LayoutDashboard, Users, Target, PhoneCall, Map, FileText, ShoppingCart,
   Package, UserCircle, BarChart3, Settings, Plus, Search, Pencil, Trash2,
-  X, Menu, Wallet, Trophy, ChevronRight, Printer, LogOut, Loader2
+  X, Menu, Wallet, Trophy, ChevronRight, Printer, LogOut, Loader2, Upload
 } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid,
@@ -81,6 +81,95 @@ async function sbDelete(table, id, token) {
     throw new Error(data.message || "Gagal menghapus data");
   }
   return true;
+}
+
+/* ------------------------------ CSV import helper ------------------------------ */
+
+function splitCsvLine(line) {
+  const cells = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (line[i + 1] === '"') { cur += '"'; i++; } else { inQuotes = false; }
+      } else cur += c;
+    } else {
+      if (c === '"') inQuotes = true;
+      else if (c === ",") { cells.push(cur); cur = ""; }
+      else cur += c;
+    }
+  }
+  cells.push(cur);
+  return cells;
+}
+
+function parseCsv(text) {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (lines.length < 2) return [];
+  const headers = splitCsvLine(lines[0]).map((h) => h.trim());
+  return lines.slice(1).map((line) => {
+    const cells = splitCsvLine(line);
+    const obj = {};
+    headers.forEach((h, i) => { obj[h] = (cells[i] ?? "").trim(); });
+    return obj;
+  });
+}
+
+function ImportCsvButton({ table, fields, token, reload }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const inputRef = useRef();
+
+  function downloadTemplate() {
+    const headers = fields.map((f) => f.key).join(",");
+    const example = fields.map((f) => f.example || "").join(",");
+    const csv = headers + "\n" + example;
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `template-${table}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function handleFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    setBusy(true);
+    setMsg("");
+    try {
+      const text = await file.text();
+      const rows = parseCsv(text);
+      if (rows.length === 0) throw new Error("File CSV kosong atau formatnya tidak terbaca.");
+      await sbInsert(table, rows, token);
+      setMsg(`Berhasil impor ${rows.length} baris.`);
+      reload();
+    } catch (err) {
+      setMsg("Gagal impor: " + err.message);
+    } finally {
+      setBusy(false);
+      if (inputRef.current) inputRef.current.value = "";
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <button type="button" onClick={downloadTemplate} className="text-xs text-slate-500 underline whitespace-nowrap">
+        Unduh Template
+      </button>
+      <button
+        type="button" disabled={busy} onClick={() => inputRef.current.click()}
+        className="flex items-center gap-1.5 border border-slate-300 text-slate-600 text-sm font-medium px-3.5 py-2 rounded-lg hover:bg-slate-50 disabled:opacity-60 whitespace-nowrap"
+      >
+        {busy ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />} Impor CSV
+      </button>
+      <input ref={inputRef} type="file" accept=".csv" className="hidden" onChange={handleFile} />
+      {msg && <span className="text-xs text-slate-500">{msg}</span>}
+    </div>
+  );
 }
 
 /* ---------------------------------- utils ---------------------------------- */
@@ -169,7 +258,7 @@ function Field({ f, value, onChange }) {
 }
 
 /** Generic CRUD table + form page, backed live by a Supabase table (via REST) */
-function CrudPage({ title, table, data, reload, token, fields, columns, searchKeys }) {
+function CrudPage({ title, table, data, reload, token, fields, columns, searchKeys, importFields }) {
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState(null);
   const [confirmDel, setConfirmDel] = useState(null);
@@ -228,7 +317,8 @@ function CrudPage({ title, table, data, reload, token, fields, columns, searchKe
     <div>
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <h2 className="text-lg font-semibold text-slate-800">{title}</h2>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {importFields && <ImportCsvButton table={table} fields={importFields} token={token} reload={reload} />}
           <div className="relative">
             <Search size={15} className="absolute left-2.5 top-2.5 text-slate-400" />
             <input
@@ -738,6 +828,15 @@ export default function App() {
           <CrudPage
             title="Master Customer" table="customers" data={db.customers} reload={reloadAll} token={token}
             searchKeys={["nama_usaha", "kategori", "pic"]}
+            importFields={[
+              { key: "nama_usaha", example: "Contoh Resto Sedap" },
+              { key: "kategori", example: "Restoran" },
+              { key: "alamat", example: "Jl. Contoh No. 1, Bandung" },
+              { key: "pic", example: "Budi" },
+              { key: "hp", example: "0812xxxxxxx" },
+              { key: "email", example: "email@contoh.com" },
+              { key: "status", example: "Aktif" },
+            ]}
             fields={[
               { key: "nama_usaha", label: "Nama Usaha", type: "text" },
               { key: "kategori", label: "Kategori", type: "select", options: ["Hotel", "Cafe", "Restoran", "Bakery", "Catering", "Lounge"] },
