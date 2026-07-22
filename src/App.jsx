@@ -711,8 +711,11 @@ const MENU = [
 const TABLES = ["customers", "prospects", "followups", "visits", "products", "quotations", "orders", "receivables", "sales"];
 
 function LoginScreen({ onLoggedIn }) {
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(() => {
+    try { return localStorage.getItem("crm_horeca_remembered_email") || ""; } catch (_) { return ""; }
+  });
   const [password, setPassword] = useState("");
+  const [remember, setRemember] = useState(true);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -721,7 +724,11 @@ function LoginScreen({ onLoggedIn }) {
     setLoading(true); setErr("");
     try {
       const authData = await sbLogin(email, password);
-      onLoggedIn(authData);
+      try {
+        if (remember) localStorage.setItem("crm_horeca_remembered_email", email);
+        else localStorage.removeItem("crm_horeca_remembered_email");
+      } catch (_) {}
+      onLoggedIn(authData, remember);
     } catch (e) {
       setErr(e.message);
     } finally {
@@ -732,7 +739,7 @@ function LoginScreen({ onLoggedIn }) {
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50" style={{ fontFamily: "'Manrope', ui-sans-serif, system-ui, sans-serif" }}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap');`}</style>
-      <form onSubmit={handleLogin} className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8 w-full max-w-sm">
+      <form onSubmit={handleLogin} autoComplete="on" className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8 w-full max-w-sm">
         <div className="flex items-center gap-2 mb-6">
           <div className="w-9 h-9 rounded-lg bg-amber-500 flex items-center justify-center font-bold text-slate-900">A</div>
           <div>
@@ -741,9 +748,19 @@ function LoginScreen({ onLoggedIn }) {
           </div>
         </div>
         <label className="block text-xs font-medium text-slate-600 mb-1">Email</label>
-        <input className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm mb-3" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+        <input
+          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm mb-3" type="email" name="email"
+          autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required
+        />
         <label className="block text-xs font-medium text-slate-600 mb-1">Password</label>
-        <input className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm mb-4" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+        <input
+          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm mb-3" type="password" name="password"
+          autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required
+        />
+        <label className="flex items-center gap-2 text-xs text-slate-600 mb-4 cursor-pointer select-none">
+          <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} className="rounded border-slate-300" />
+          Ingat saya di perangkat ini
+        </label>
         {err && <p className="text-xs text-rose-600 mb-3">{err}</p>}
         <button disabled={loading} className="w-full bg-slate-900 text-white text-sm font-medium py-2.5 rounded-lg flex items-center justify-center gap-1.5 disabled:opacity-60">
           {loading && <Loader2 size={14} className="animate-spin" />} Masuk
@@ -754,16 +771,43 @@ function LoginScreen({ onLoggedIn }) {
   );
 }
 
+const SESSION_KEY = "crm_horeca_session";
+function saveSession(authData, remember) {
+  try {
+    if (remember) {
+      localStorage.setItem(SESSION_KEY, JSON.stringify(authData));
+      sessionStorage.removeItem(SESSION_KEY);
+    } else {
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify(authData));
+      localStorage.removeItem(SESSION_KEY);
+    }
+  } catch (_) {}
+}
+function loadSession() {
+  try {
+    const fromLocal = localStorage.getItem(SESSION_KEY);
+    if (fromLocal) return JSON.parse(fromLocal);
+    const fromSession = sessionStorage.getItem(SESSION_KEY);
+    if (fromSession) return JSON.parse(fromSession);
+  } catch (_) {}
+  return null;
+}
+function clearSession() {
+  try { localStorage.removeItem(SESSION_KEY); sessionStorage.removeItem(SESSION_KEY); } catch (_) {}
+}
+
 export default function App() {
   const [auth, setAuth] = useState(null); // { access_token, user }
   const [profile, setProfile] = useState(null);
   const [profileChecked, setProfileChecked] = useState(false);
+  const [restoring, setRestoring] = useState(true);
   const [active, setActive] = useState("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [db, setDb] = useState({ customers: [], prospects: [], followups: [], visits: [], products: [], quotations: [], orders: [], receivables: [], sales: [] });
   const [loadingData, setLoadingData] = useState(false);
 
-  async function onLoggedIn(authData) {
+  async function onLoggedIn(authData, remember = true) {
+    saveSession(authData, remember);
     setAuth(authData);
     setProfileChecked(false);
     try {
@@ -774,6 +818,15 @@ export default function App() {
     }
     setProfileChecked(true);
   }
+
+  React.useEffect(() => {
+    const saved = loadSession();
+    if (saved) {
+      onLoggedIn(saved, true).finally(() => setRestoring(false));
+    } else {
+      setRestoring(false);
+    }
+  }, []);
 
   async function reloadAll() {
     if (!auth) return;
@@ -788,13 +841,19 @@ export default function App() {
   React.useEffect(() => { if (auth && profile) reloadAll(); }, [auth, profile]);
 
   function handleLogout() {
+    clearSession();
     setAuth(null);
     setProfile(null);
     setProfileChecked(false);
     setDb({ customers: [], prospects: [], followups: [], visits: [], products: [], quotations: [], orders: [], receivables: [], sales: [] });
   }
 
+  if (restoring) {
+    return <div className="min-h-screen flex items-center justify-center text-slate-400"><Loader2 className="animate-spin" size={22} /></div>;
+  }
+
   if (!auth) return <LoginScreen onLoggedIn={onLoggedIn} />;
+
 
   if (!profileChecked) {
     return <div className="min-h-screen flex items-center justify-center text-slate-400"><Loader2 className="animate-spin" size={22} /></div>;
